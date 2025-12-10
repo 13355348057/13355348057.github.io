@@ -1,0 +1,403 @@
+<!doctype html>
+<html>
+<head>
+	<meta charset="utf-8">
+	<title>我爱你</title>
+	<meta name="language" content="zh-CN">
+	<style>
+		html, body {
+			margin: 0px;
+			width: 100%;
+			height: 100%;
+			overflow: hidden;
+			background: #000;
+		}
+		/* 只保留一个canvas，确保特效正常显示 */
+		#canvas {
+			position: absolute;
+			width: 100%;
+			height: 100%;
+			z-index: 8888;
+		}
+		/* 资源加载失败提示 */
+		.error-tip {
+			position: fixed;
+			top: 50%;
+			left: 50%;
+			transform: translate(-50%, -50%);
+			color: #fff;
+			font-size: 16px;
+			text-align: center;
+			display: none;
+		}
+	</style>
+</head>
+<body>
+	<!-- 只保留一个canvas（核心特效容器） -->
+	<canvas id="canvas"></canvas>
+	<!-- 资源加载失败提示 -->
+	<div class="error-tip" id="errorTip">
+		特效资源加载失败<br>
+		点击页面尝试重新加载
+	</div>
+
+	<script type="text/javascript">
+		// 1. 声明全局变量（全部用var，兼容ES5）
+		var pi, ctx, canvas, cx, cy;
+		var playerZ, playerX, playerY, playerVX, playerVY, playerVZ, pitch, yaw, pitchV, yawV;
+		var scale, seedTimer, seedInterval, seedLife, gravity;
+		var seeds, sparkPics, s, sparks, pow1, pow2, pow3, pow4, frames;
+
+		function initVars() {
+			pi = Math.PI;
+			canvas = document.getElementById("canvas"); // 获取唯一的canvas
+			ctx = canvas.getContext("2d");
+			canvas.width = canvas.clientWidth;
+			canvas.height = canvas.clientHeight;
+			cx = canvas.width / 2;
+			cy = canvas.height / 2;
+			playerZ = -25;
+			playerX = playerY = playerVX = playerVY = playerVZ = pitch = yaw = pitchV = yawV = 0;
+			scale = 600;
+			seedTimer = 0; 
+			seedInterval = 5;
+			seedLife = 100; 
+			gravity = 0.02;
+			seeds = new Array();
+			sparkPics = new Array();
+			// 替换为可靠的公共资源（或本地资源），避免原域名失效
+			s = "https://cdn.jsdelivr.net/gh/cantelope/NYE/"; // 镜像资源（示例，实际需确认有效性）
+			
+			// 资源加载失败计数（var替代let）
+			var loadFailCount = 0;
+			var totalResources = 14; // 10张图片 + 4个音频（var替代const）
+
+			// 关键修正：先定义checkResourceLoad函数，再调用
+			function checkResourceLoad() {
+				// 箭头函数→普通函数，var替代const
+				var loadedCount = sparkPics.filter(function(pic) {
+					return pic.complete;
+				}).length + 
+				[pow1, pow2, pow3, pow4].filter(function(audio) {
+					return audio.readyState >= 2;
+				}).length;
+				
+				// 若所有资源加载成功，隐藏错误提示；若部分失败，显示提示
+				if (loadedCount === totalResources) {
+					document.getElementById("errorTip").style.display = "none";
+				} else if (loadedCount + loadFailCount === totalResources) {
+					document.getElementById("errorTip").style.display = "block";
+				}
+			}
+
+			// 加载粒子图片（添加加载失败监听）
+			for (var i = 1; i <= 10; ++i) { // var替代let
+				var sparkPic = new Image(); // var替代const
+				sparkPic.src = s + "spark" + i + ".png";
+				// 图片加载失败回调（现在checkResourceLoad已定义）
+				sparkPic.onerror = function() {
+					loadFailCount++;
+					checkResourceLoad();
+				};
+				sparkPic.onload = checkResourceLoad;
+				sparkPics.push(sparkPic);
+			}
+
+			// 加载音频（添加加载失败监听）
+			function loadAudio(name) {
+				var audio = new Audio(s + name + ".ogg"); // var替代const
+				audio.onerror = function() {
+					loadFailCount++;
+					checkResourceLoad();
+				};
+				audio.onloadeddata = checkResourceLoad;
+				return audio;
+			}
+			pow1 = loadAudio("pow1");
+			pow2 = loadAudio("pow2");
+			pow3 = loadAudio("pow3");
+			pow4 = loadAudio("pow4");
+
+			sparks = new Array();
+			frames = 0;
+		}
+
+		// 2. 保留原核心逻辑（rasterizePoint/spawnSeed/splode/doLogic/rgb）
+		function rasterizePoint(x, y, z) {
+			var p, d; // var替代let
+			x -= playerX;
+			y -= playerY;
+			z -= playerZ;
+			p = Math.atan2(x, z);
+			d = Math.sqrt(x * x + z * z);
+			x = Math.sin(p - yaw) * d;
+			z = Math.cos(p - yaw) * d;
+			p = Math.atan2(y, z);
+			d = Math.sqrt(y * y + z * z);
+			y = Math.sin(p - pitch) * d;
+			z = Math.cos(p - pitch) * d;
+			var rx1 = -1000, ry1 = 1, rx2 = 1000, ry2 = 1, rx3 = 0, ry3 = 0, rx4 = x, ry4 = z; // var替代const
+			var uc = (ry4 - ry3) * (rx2 - rx1) - (rx4 - rx3) * (ry2 - ry1); // var替代const
+			if (!uc) return { x: 0, y: 0, d: -1 };
+			var ua = ((rx4 - rx3) * (ry1 - ry3) - (ry4 - ry3) * (rx1 - rx3)) / uc; // var替代const
+			var ub = ((rx2 - rx1) * (ry1 - ry3) - (ry2 - ry1) * (rx1 - rx3)) / uc; // var替代const
+			if (!z) z = 0.000000001;
+			if (ua > 0 && ua < 1 && ub > 0 && ub < 1) {
+				return {
+					x: cx + (rx1 + ua * (rx2 - rx1)) * scale,
+					y: cy + y / z * scale,
+					d: Math.sqrt(x * x + y * y + z * z)
+				};
+			} else {
+				return {
+					x: cx + (rx1 + ua * (rx2 - rx1)) * scale,
+					y: cy + y / z * scale,
+					d: -1
+				};
+			}
+		}
+
+		function spawnSeed() {
+			var seed = new Object(); // var替代const
+			seed.x = -50 + Math.random() * 100;
+			seed.y = 25;
+			seed.z = -50 + Math.random() * 100;
+			seed.vx = 0.1 - Math.random() * 0.2;
+			seed.vy = -1.5;
+			seed.vz = 0.1 - Math.random() * 0.2;
+			seed.born = frames;
+			seeds.push(seed);
+		}
+
+		function splode(x, y, z) {
+			var t = 5 + parseInt(Math.random() * 150); // var替代const
+			var sparkV = 1 + Math.random() * 2.5; // var替代const
+			var type = parseInt(Math.random() * 3); // var替代const
+			var pic1, pic2, pic3; // var替代let
+			switch (type) {
+				case 0:
+					pic1 = parseInt(Math.random() * 10);
+					break;
+				case 1:
+					pic1 = parseInt(Math.random() * 10);
+					do { pic2 = parseInt(Math.random() * 10); } while (pic2 == pic1);
+					break;
+				case 2:
+					pic1 = parseInt(Math.random() * 10);
+					do { pic2 = parseInt(Math.random() * 10); } while (pic2 == pic1);
+					do { pic3 = parseInt(Math.random() * 10); } while (pic3 == pic1 || pic3 == pic2);
+					break;
+			}
+			for (var m = 1; m < t; ++m) { // var替代let
+				var spark = new Object(); // var替代const
+				spark.x = x; spark.y = y; spark.z = z;
+				var p1 = pi * 2 * Math.random(); // var替代const
+				var p2 = pi * Math.random(); // var替代const
+				var v = sparkV * (1 + Math.random() / 6); // var替代const
+				spark.vx = Math.sin(p1) * Math.sin(p2) * v;
+				spark.vz = Math.cos(p1) * Math.sin(p2) * v;
+				spark.vy = Math.cos(p2) * v;
+				switch (type) {
+					case 0: spark.img = sparkPics[pic1]; break;
+					case 1:
+						spark.img = sparkPics[parseInt(Math.random() * 2) ? pic1 : pic2];
+						break;
+					case 2:
+						switch (parseInt(Math.random() * 3)) {
+							case 0: spark.img = sparkPics[pic1]; break;
+							case 1: spark.img = sparkPics[pic2]; break;
+							case 2: spark.img = sparkPics[pic3]; break;
+						}
+						break;
+				}
+				spark.radius = 25 + Math.random() * 50;
+				spark.alpha = 1;
+				spark.trail = new Array();
+				sparks.push(spark);
+			}
+			// 音频播放兼容：需用户交互后播放
+			var audioIndex = parseInt(Math.random() * 4); // var替代const
+			var pow; // var替代let
+			switch (audioIndex) {
+				case 0: pow = pow1.cloneNode(); break;
+				case 1: pow = pow2.cloneNode(); break;
+				case 2: pow = pow3.cloneNode(); break;
+				case 3: pow = pow4.cloneNode(); break;
+			}
+			var d = Math.sqrt((x - playerX) * (x - playerX) + (y - playerY) * (y - playerY) + (z - playerZ) * (z - playerZ)); // var替代const
+			pow.volume = 1.5 / (1 + d / 10);
+			// 箭头函数→普通函数，兼容老旧浏览器
+			pow.play().catch(function(err) {
+				console.warn("音频播放被拦截：", err);
+			});
+		}
+
+		function doLogic() {
+			if (seedTimer < frames) {
+				seedTimer = frames + seedInterval * Math.random() * 10;
+				spawnSeed();
+			}
+			for (var i = 0; i < seeds.length; ++i) { // var替代let
+				seeds[i].vy += gravity;
+				seeds[i].x += seeds[i].vx;
+				seeds[i].y += seeds[i].vy;
+				seeds[i].z += seeds[i].vz;
+				if (frames - seeds[i].born > seedLife) {
+					splode(seeds[i].x, seeds[i].y, seeds[i].z);
+					seeds.splice(i, 1);
+				}
+			}
+			for (var i = 0; i < sparks.length; ++i) { // var替代let
+				if (sparks[i].alpha > 0 && sparks[i].radius > 5) {
+					sparks[i].alpha -= 0.01;
+					sparks[i].radius /= 1.02;
+					sparks[i].vy += gravity;
+					var point = new Object(); // var替代const
+					point.x = sparks[i].x;
+					point.y = sparks[i].y;
+					point.z = sparks[i].z;
+					if (sparks[i].trail.length) {
+						var x = sparks[i].trail[sparks[i].trail.length - 1].x; // var替代const
+						var y = sparks[i].trail[sparks[i].trail.length - 1].y; // var替代const
+						var z = sparks[i].trail[sparks[i].trail.length - 1].z; // var替代const
+						var d = ((point.x - x) * (point.x - x) + (point.y - y) * (point.y - y) + (point.z - z) * (point.z - z)); // var替代const
+						if (d > 9) {
+							sparks[i].trail.push(point);
+						}
+					} else {
+						sparks[i].trail.push(point);
+					}
+					if (sparks[i].trail.length > 5) sparks[i].trail.splice(0, 1);
+					sparks[i].x += sparks[i].vx;
+					sparks[i].y += sparks[i].vy;
+					sparks[i].z += sparks[i].vz;
+					sparks[i].vx /= 1.075;
+					sparks[i].vy /= 1.075;
+					sparks[i].vz /= 1.075;
+				} else {
+					sparks.splice(i, 1);
+				}
+			}
+			var p = Math.atan2(playerX, playerZ); // var替代const
+			var d = Math.sqrt(playerX * playerX + playerZ * playerZ); // var替代let/const
+			d += Math.sin(frames / 80) / 1.25;
+			var t = Math.sin(frames / 200) / 40; // var替代const
+			playerX = Math.sin(p + t) * d;
+			playerZ = Math.cos(p + t) * d;
+			yaw = pi + p + t;
+		}
+
+		function rgb(col) {
+			var r = parseInt((0.5 + Math.sin(col) * 0.5) * 16); // var替代const
+			var g = parseInt((0.5 + Math.cos(col) * 0.5) * 16); // var替代const
+			var b = parseInt((0.5 - Math.sin(col) * 0.5) * 16); // var替代const
+			return "#" + r.toString(16) + g.toString(16) + b.toString(16);
+		}
+
+		function draw() {
+			ctx.clearRect(0, 0, cx * 2, cy * 2);
+
+			ctx.fillStyle = "#ff8";
+			for (var i = -100; i < 100; i += 3) { // var替代let
+				for (var j = -100; j < 100; j += 4) { // var替代let
+					var x = i; // var替代const
+					var z = j; // var替代const
+					var y = 25; // var替代const
+					var point = rasterizePoint(x, y, z); // var替代const
+					if (point.d != -1) {
+						var size = 250 / (1 + point.d); // var替代const
+						var d = Math.sqrt(x * x + z * z); // var替代const
+						var a = 0.75 - Math.pow(d / 100, 6) * 0.75; // var替代const
+						if (a > 0) {
+							ctx.globalAlpha = a;
+							ctx.fillRect(point.x - size / 2, point.y - size / 2, size, size);
+						}
+					}
+				}
+			}
+			ctx.globalAlpha = 1;
+			for (var i = 0; i < seeds.length; ++i) { // var替代let
+				var point = rasterizePoint(seeds[i].x, seeds[i].y, seeds[i].z); // var替代const
+				if (point.d != -1) {
+					var size = 200 / (1 + point.d); // var替代const
+					ctx.fillRect(point.x - size / 2, point.y - size / 2, size, size);
+				}
+			}
+			var point1 = new Object(); // var替代const
+			for (var i = 0; i < sparks.length; ++i) { // var替代let
+				var point = rasterizePoint(sparks[i].x, sparks[i].y, sparks[i].z); // var替代const
+				if (point.d != -1) {
+					var size = sparks[i].radius * 200 / (1 + point.d); // var替代const
+					if (sparks[i].alpha < 0) sparks[i].alpha = 0;
+					if (sparks[i].trail.length) {
+						point1.x = point.x;
+						point1.y = point.y;
+						switch (sparks[i].img) {
+							case sparkPics[0]: ctx.strokeStyle = "#f84"; break;
+							case sparkPics[1]: ctx.strokeStyle = "#84f"; break;
+							case sparkPics[2]: ctx.strokeStyle = "#8ff"; break;
+							case sparkPics[3]: ctx.strokeStyle = "#fff"; break;
+							case sparkPics[4]: ctx.strokeStyle = "#4f8"; break;
+							case sparkPics[5]: ctx.strokeStyle = "#f44"; break;
+							case sparkPics[6]: ctx.strokeStyle = "#f84"; break;
+							case sparkPics[7]: ctx.strokeStyle = "#84f"; break;
+							case sparkPics[8]: ctx.strokeStyle = "#fff"; break;
+							case sparkPics[9]: ctx.strokeStyle = "#44f"; break;
+						}
+						for (var j = sparks[i].trail.length - 1; j >= 0; --j) { // var替代let
+							var point2 = rasterizePoint(sparks[i].trail[j].x, sparks[i].trail[j].y, sparks[i].trail[j].z); // var替代const
+							if (point2.d != -1) {
+								ctx.globalAlpha = j / sparks[i].trail.length * sparks[i].alpha / 2;
+								ctx.beginPath();
+								ctx.moveTo(point1.x, point1.y);
+								ctx.lineWidth = 1 + sparks[i].radius * 10 / (sparks[i].trail.length - j) / (1 + point2.d);
+								ctx.lineTo(point2.x, point2.y);
+								ctx.stroke();
+								point1.x = point2.x;
+								point1.y = point2.y;
+							}
+						}
+					}
+					ctx.globalAlpha = sparks[i].alpha;
+					ctx.drawImage(sparks[i].img, point.x - size / 2, point.y - size / 2, size, size);
+				}
+			}
+		}
+
+		function frame() {
+			if (frames > 100000) {
+				seedTimer = 0;
+				frames = 0;
+			}
+			frames++;
+			draw();
+			doLogic();
+			// requestAnimationFrame兼容（老旧浏览器降级）
+			if (window.requestAnimationFrame) {
+				window.requestAnimationFrame(frame);
+			} else {
+				// IE8及以下用setTimeout替代
+				window.setTimeout(frame, 16);
+			}
+		}
+
+		// 窗口resize适配（箭头函数→普通函数）
+		window.addEventListener("resize", function() {
+			canvas.width = canvas.clientWidth;
+			canvas.height = canvas.clientHeight;
+			cx = canvas.width / 2;
+			cy = canvas.height / 2;
+		});
+
+		// 资源加载失败时，点击页面重新初始化
+		document.getElementById("errorTip").addEventListener("click", function() {
+			initVars();
+			this.style.display = "none";
+		});
+
+		// 初始化（触发资源加载和特效启动）
+		initVars();
+		frame();
+	</script>
+</body>
+</html>
